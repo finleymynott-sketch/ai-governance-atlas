@@ -5,6 +5,7 @@ import { ExplorationSection } from '@/components/exploration';
 import { ScrollytellingSection } from '@/components/scrollytelling';
 import { CompareSection } from '@/components/compare';
 import { MethodologySection } from '@/components/methodology';
+import { RankingsSection } from '@/components/rankings';
 import { useAtlasStore } from '@/store/useAtlasStore';
 
 /**
@@ -43,6 +44,18 @@ function App() {
             className="overflow-hidden"
           >
             <ScrollytellingSection onComplete={handleScrollyComplete} />
+          </motion.div>
+        )}
+
+        {viewMode === 'rankings' && (
+          <motion.div
+            key="rankings"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+          >
+            <RankingsSection />
           </motion.div>
         )}
 

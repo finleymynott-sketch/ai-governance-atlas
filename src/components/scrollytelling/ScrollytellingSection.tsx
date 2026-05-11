@@ -10,7 +10,7 @@ import { ParticleTrail } from './ParticleTrail';
 import { FloatingOrbs } from './FloatingOrbs';
 import { ParticleBurst } from './ParticleBurst';
 import { scrollySteps, TOTAL_STEPS } from './scrollyConfig';
-import { PILLAR_CONFIG } from '@/types';
+import { PILLAR_CONFIG, MAP_MODE_CONFIG } from '@/types';
 
 interface ScrollytellingSectionProps {
   onComplete: () => void;
@@ -53,13 +53,13 @@ export const ScrollytellingSection = ({ onComplete }: ScrollytellingSectionProps
     const prevStep = prevStepRef.current;
     const currentConfig = scrollySteps[currentStep];
 
-    // Check if we're transitioning between pillar slides
     const pillarSlides = ['build', 'break', 'balance', 'gap'];
     const isCurrentPillar = pillarSlides.includes(currentConfig?.id ?? '');
 
     if (isCurrentPillar && currentStep !== prevStep) {
-      const pillar = currentConfig?.mapState.activePillar;
-      if (pillar && PILLAR_COLORS[pillar]) {
+      const mode = currentConfig?.mapState.mapMode;
+      const pillar = mode ? MAP_MODE_CONFIG[mode].pillar : null;
+      if (pillar && pillar !== 'composite' && pillar !== 'typology' && PILLAR_COLORS[pillar]) {
         setParticleColor(PILLAR_COLORS[pillar]);
         setShowParticleTrail(true);
         setTimeout(() => setShowParticleTrail(false), 1200);
@@ -167,14 +167,18 @@ export const ScrollytellingSection = ({ onComplete }: ScrollytellingSectionProps
   const isLastSlide = currentStep === TOTAL_STEPS - 1;
   const isFrameworkSlide = currentConfig.id === 'framework';
 
-  // Get edge glow color based on current pillar
-  const edgeGlowColor = currentMapState.activePillar
-    ? PILLAR_COLORS[currentMapState.activePillar]
+  // Get edge glow color based on current pillar.
+  const currentPillar = currentMapState.mapMode
+    ? MAP_MODE_CONFIG[currentMapState.mapMode].pillar
     : null;
+  const edgeGlowColor =
+    currentPillar && currentPillar !== 'composite' && currentPillar !== 'typology'
+      ? PILLAR_COLORS[currentPillar]
+      : null;
 
   return (
     <div
-      className="relative h-[calc(100vh-3.5rem)] bg-bg-primary overflow-hidden cursor-pointer"
+      className="relative h-[calc(100vh-4rem)] bg-bg-primary overflow-hidden cursor-pointer"
       onClick={handleContainerClick}
     >
       {/* Big pillar title (behind everything) */}
@@ -257,9 +261,10 @@ export const ScrollytellingSection = ({ onComplete }: ScrollytellingSectionProps
           <FloatingOrbs isActive={isFrameworkSlide} />
 
           {/* Country comparison card */}
+          {/* Headline demographic-paradox pair from the dissertation. */}
           <CountryComparisonCard
             visible={currentConfig.showComparisonCard}
-            countries={['USA', 'DEU']}
+            countries={['USA', 'JPN']}
             showBreakdown={currentConfig.showComparisonBreakdown}
           />
         </div>

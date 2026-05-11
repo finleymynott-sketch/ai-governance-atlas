@@ -11,9 +11,12 @@ import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { useAtlasStore } from '@/store/useAtlasStore';
 import { MapTooltip } from './MapTooltip';
 import { MapLegend } from './MapLegend';
-import type { Country, ActivePillar } from '@/types';
+import { MissingPolygonMarkers } from './MissingPolygonMarkers';
+import type { Country, MapMode } from '@/types';
 import { ISO_NUMERIC_TO_ALPHA3 } from '@/types/geo';
-import { PILLAR_SCALES_DARK, PILLAR_SCALES_LIGHT, RISK_SCALE } from '@/utils/pillarScales';
+import { getRampForMode } from '@/utils/pillarScales';
+import { getClusterColor, tertileBreaks, bivariateColor } from '@/utils/scales';
+import { valueForMode } from '@/utils/dataLoader';
 
 interface ChoroplethMapProps {
   interactive?: boolean;
@@ -23,56 +26,58 @@ interface CountryFeature extends Feature<Geometry> {
   id: string;
 }
 
-/** Zoom constraints */
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
-
-/** Panel width for viewport compensation */
 const PANEL_WIDTH = 380;
 
 /**
- * Get colour for a country based on its score and active pillar
+ * Sovereignty values are mathematically restricted to [0.5, 1.0]. Using a
+ * [0, 1] domain on the quantize scale wastes half the colour ramp and collapses
+ * USA (0.92) and the no-cloud cluster (1.0) into the same bucket.
  */
-const getCountryColor = (
-  country: Country | undefined,
-  pillar: ActivePillar,
-  isDark: boolean
-): string => {
-  if (!country) {
-    return isDark ? '#2A2A2A' : '#D4D4D4';
-  }
-
-  const value = pillar === 'risk' ? country.riskImbalance : country[pillar].overall;
-  const pillarScales = isDark ? PILLAR_SCALES_DARK : PILLAR_SCALES_LIGHT;
-
-  if (pillar === 'risk') {
-    const normalized = (Math.max(-0.5, Math.min(0.5, value)) + 0.5) / 1;
-    const scale = scaleQuantize<string>().domain([0, 1]).range(RISK_SCALE);
-    return scale(normalized);
-  }
-
-  const scale = scaleQuantize<string>().domain([0, 1]).range([...pillarScales[pillar]]);
-  return scale(value);
+const domainForMode = (mode: MapMode): [number, number] => {
+  if (mode === 'sovereignty') return [0.5, 1];
+  return [0, 1];
 };
 
 /**
- * Interactive choropleth world map component with pan & zoom
+ * Pick a fill colour for a country given the active map mode. Continuous modes
+ * use a quantized 5-bucket scale; categorical (clusters) and bivariate modes
+ * use their dedicated palettes.
  */
+const getCountryColor = (
+  country: Country | undefined,
+  mode: MapMode,
+  isDark: boolean,
+  bivariateBreaks: { hazard: [number, number]; displacement: [number, number] }
+): string => {
+  if (!country) return isDark ? '#2A2A2A' : '#D4D4D4';
+
+  if (mode === 'clusters') return getClusterColor(country.cluster.id);
+  if (mode === 'bivariate') {
+    return bivariateColor(country.build.hazard, country.break.displacement, bivariateBreaks);
+  }
+
+  const ramp = [...getRampForMode(mode, isDark)];
+  const value = valueForMode(country, mode as Exclude<MapMode, 'bivariate' | 'clusters'>);
+  const scale = scaleQuantize<string>().domain(domainForMode(mode)).range(ramp);
+  return scale(value);
+};
+
 export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef = useRef<SVGGElement>(null);
   const zoomBehaviorRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
-  
+
   const [topoData, setTopoData] = useState<Topology | null>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 });
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number } | null>(null);
   const [currentZoom, setCurrentZoom] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Store state
   const countries = useAtlasStore((state) => state.countries);
-  const activePillar = useAtlasStore((state) => state.activePillar);
+  const mapMode = useAtlasStore((state) => state.mapMode);
   const activeClusterFilter = useAtlasStore((state) => state.activeClusterFilter);
   const hoveredCountry = useAtlasStore((state) => state.hoveredCountry);
   const selectedCountry = useAtlasStore((state) => state.selectedCountry);
@@ -81,18 +86,25 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
   const selectCountry = useAtlasStore((state) => state.selectCountry);
 
   const isDark = theme === 'dark';
-  
-  // Determine if country panel is open (for viewport compensation)
   const countryPanelOpen = useAtlasStore((state) => state.countryPanelOpen);
 
-  // Create country lookup map
   const countryMap = useMemo(() => {
     const map = new Map<string, Country>();
     countries.forEach((c) => map.set(c.id, c));
     return map;
   }, [countries]);
 
-  // Load TopoJSON data
+  /** Tertile breaks for the bivariate mode, recomputed on data change. */
+  const bivariateBreaks = useMemo(
+    () => ({
+      hazard: tertileBreaks(countries.filter((c) => !c.flags.isSupranational).map((c) => c.build.hazard)),
+      displacement: tertileBreaks(
+        countries.filter((c) => !c.flags.isSupranational).map((c) => c.break.displacement)
+      ),
+    }),
+    [countries]
+  );
+
   useEffect(() => {
     fetch('/data/world-110m.json')
       .then((res) => res.json())
@@ -100,59 +112,41 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
       .catch((err) => console.error('Failed to load TopoJSON:', err));
   }, []);
 
-  // Handle resize - fill available space
   useEffect(() => {
     const handleResize = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
-        setDimensions({ 
-          width: rect.width, 
-          height: rect.height 
-        });
+        setDimensions({ width: rect.width, height: rect.height });
       }
     };
-
     handleResize();
     window.addEventListener('resize', handleResize);
-    
     const resizeObserver = new ResizeObserver(handleResize);
-    if (containerRef.current) {
-      resizeObserver.observe(containerRef.current);
-    }
-    
+    if (containerRef.current) resizeObserver.observe(containerRef.current);
     return () => {
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
     };
   }, []);
 
-  // Initialize and update D3 zoom behavior
   useEffect(() => {
     if (!svgRef.current || !gRef.current || !interactive || dimensions.width === 0) return;
-
     const svg = select(svgRef.current);
     const g = select(gRef.current);
     const { width, height } = dimensions;
-
-    // Pan limits - allow some movement but keep map mostly visible
     const panPadding = 100;
 
-    // Create zoom behavior with proper constraints
     const zoomBehavior = zoom<SVGSVGElement, unknown>()
       .scaleExtent([MIN_ZOOM, MAX_ZOOM])
-      // translateExtent constrains panning - map stays within these bounds
       .translateExtent([
         [-panPadding, -panPadding],
-        [width + panPadding, height + panPadding]
+        [width + panPadding, height + panPadding],
       ])
-      // extent defines the viewport
       .extent([
         [0, 0],
-        [width, height]
+        [width, height],
       ])
       .filter((event) => {
-        // Allow wheel zoom (even with ctrl), left-click drag, and double-click
-        // Prevent right-click from triggering zoom
         if (event.type === 'dblclick') return true;
         return (!event.ctrlKey || event.type === 'wheel') && !event.button;
       })
@@ -165,18 +159,11 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
         g.attr('transform', event.transform.toString());
         setCurrentZoom(event.transform.k);
       })
-      .on('end', () => {
-        setIsDragging(false);
-      });
+      .on('end', () => setIsDragging(false));
 
-    // Remove any existing zoom behavior first
     svg.on('.zoom', null);
-    
-    // Apply zoom behavior
     svg.call(zoomBehavior);
     zoomBehaviorRef.current = zoomBehavior;
-
-    // Set initial transform (centered, zoom 1)
     svg.call(zoomBehavior.transform, zoomIdentity);
 
     return () => {
@@ -184,24 +171,19 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
     };
   }, [interactive, dimensions, topoData]);
 
-  // Zoom control handlers
   const handleZoomIn = useCallback(() => {
     if (!svgRef.current || !zoomBehaviorRef.current) return;
-    const svg = select(svgRef.current);
-    svg.transition().duration(300).call(zoomBehaviorRef.current.scaleBy, 1.5);
+    select(svgRef.current).transition().duration(300).call(zoomBehaviorRef.current.scaleBy, 1.5);
   }, []);
 
   const handleZoomOut = useCallback(() => {
     if (!svgRef.current || !zoomBehaviorRef.current) return;
-    const svg = select(svgRef.current);
-    svg.transition().duration(300).call(zoomBehaviorRef.current.scaleBy, 1 / 1.5);
+    select(svgRef.current).transition().duration(300).call(zoomBehaviorRef.current.scaleBy, 1 / 1.5);
   }, []);
 
   const handleResetView = useCallback(() => {
     if (!svgRef.current || !zoomBehaviorRef.current) return;
-    const svg = select(svgRef.current);
-    // Smooth transition back to identity (centered, zoom 1)
-    svg.transition().duration(500).call(zoomBehaviorRef.current.transform, zoomIdentity);
+    select(svgRef.current).transition().duration(500).call(zoomBehaviorRef.current.transform, zoomIdentity);
   }, []);
 
   const hoveredCountryData = hoveredCountry ? countryMap.get(hoveredCountry) : null;
@@ -212,9 +194,9 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
 
   const passesFilter = useCallback(
     (countryId: string): boolean => {
-      if (!activeClusterFilter) return true;
+      if (activeClusterFilter === null) return true;
       const country = countryMap.get(countryId);
-      return country?.clusterId === activeClusterFilter;
+      return country?.cluster.id === activeClusterFilter;
     },
     [activeClusterFilter, countryMap]
   );
@@ -224,13 +206,9 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
       if (!interactive || isDragging) return;
       const alpha3 = getAlpha3Code(featureId);
       hoverCountry(alpha3);
-      
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
-        setMousePosition({
-          x: event.clientX - rect.left,
-          y: event.clientY - rect.top,
-        });
+        setMousePosition({ x: event.clientX - rect.left, y: event.clientY - rect.top });
       }
     },
     [interactive, isDragging, getAlpha3Code, hoverCountry]
@@ -248,66 +226,42 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
       event.stopPropagation();
       const alpha3 = getAlpha3Code(featureId);
       const country = countryMap.get(alpha3);
-      if (country) {
-        // Country has data - select it
-        selectCountry(alpha3);
-      } else {
-        // Country has no data (grey) - close panel
-        selectCountry(null);
-      }
+      selectCountry(country ? alpha3 : null);
     },
     [interactive, isDragging, getAlpha3Code, countryMap, selectCountry]
   );
 
-  // Create projection and path generator - scale to fit container nicely
-  const { pathGenerator, features } = useMemo(() => {
+  const { projection, pathGenerator, features } = useMemo(() => {
     if (!topoData || dimensions.width === 0 || dimensions.height === 0) {
-      return { pathGenerator: null, features: [] };
+      return { projection: null, pathGenerator: null, features: [] };
     }
-
     const { width, height } = dimensions;
-    
-    // Padding around the map
     const padding = 30;
     const availableWidth = width - padding * 2;
     const availableHeight = height - padding * 2;
-    
-    // Natural Earth projection aspect ratio is roughly 2:1
-    // Calculate scale to fit map in container with good framing
     const scaleByWidth = availableWidth / 5.5;
     const scaleByHeight = availableHeight / 2.8;
     const scale = Math.min(scaleByWidth, scaleByHeight);
 
-    // Create projection centered in the container
-    const proj = geoNaturalEarth1()
-      .scale(scale)
-      .translate([width / 2, height / 2]);
-
+    const proj = geoNaturalEarth1().scale(scale).translate([width / 2, height / 2]);
     const path = geoPath().projection(proj);
-
     const countriesObj = topoData.objects['countries'] as GeometryCollection;
     const feats = topojson.feature(topoData, countriesObj).features as CountryFeature[];
-
-    return { pathGenerator: path, features: feats };
+    return { projection: proj, pathGenerator: path, features: feats };
   }, [topoData, dimensions]);
 
   const strokeColor = isDark ? '#404040' : '#BEBEBE';
   const hoverStrokeColor = isDark ? '#A3A3A3' : '#737373';
-  // White selection stroke - neutral, works with all pillar colors
   const selectedStrokeColor = 'rgba(255, 255, 255, 0.9)';
 
   const hasFilteredResults = useMemo(() => {
-    if (!activeClusterFilter) return true;
-    return countries.some((c) => c.clusterId === activeClusterFilter);
+    if (activeClusterFilter === null) return true;
+    return countries.some((c) => c.cluster.id === activeClusterFilter);
   }, [activeClusterFilter, countries]);
 
-  // Loading state
-  if (!topoData || !pathGenerator) {
+  if (!topoData || !pathGenerator || !projection) {
     return (
-      <div 
-        ref={containerRef} 
-        className="w-full h-full flex items-center justify-center bg-bg-primary"
-      >
+      <div ref={containerRef} className="w-full h-full flex items-center justify-center bg-bg-primary">
         <div className="flex flex-col items-center gap-4">
           <div className="flex items-center gap-2">
             <motion.div
@@ -333,17 +287,11 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
   }
 
   return (
-    <div 
-      ref={containerRef} 
-      className="relative w-full h-full flex flex-col bg-bg-primary"
-    >
-      {/* Map SVG - fills available space, shifts left when panel opens */}
-      <div 
-        className="flex-1 relative overflow-hidden min-h-0 transition-transform duration-300 ease-out" 
+    <div ref={containerRef} className="relative w-full h-full flex flex-col bg-bg-primary">
+      <div
+        className="flex-1 relative overflow-hidden min-h-0 transition-transform duration-300 ease-out"
         data-map-container
         style={{
-          // Shift map left by half the panel width when panel is open
-          // This keeps the visual center accessible
           transform: countryPanelOpen ? `translateX(-${PANEL_WIDTH / 2}px)` : 'translateX(0)',
         }}
       >
@@ -352,39 +300,23 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
           width={dimensions.width}
           height={dimensions.height}
           className="block select-none absolute inset-0"
-          style={{ 
+          style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             touchAction: 'none',
           }}
         >
-          {/* Definitions for effects */}
           <defs>
-            {/* White glow for selected countries - neutral, professional */}
             <filter id="selectedGlow" x="-50%" y="-50%" width="200%" height="200%">
-              <feDropShadow 
-                dx="0" 
-                dy="0" 
-                stdDeviation="4" 
-                floodColor="white"
-                floodOpacity="0.6"
-              >
-                <animate
-                  attributeName="floodOpacity"
-                  values="0.4;0.7;0.4"
-                  dur="2s"
-                  repeatCount="indefinite"
-                />
+              <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="white" floodOpacity="0.6">
+                <animate attributeName="floodOpacity" values="0.4;0.7;0.4" dur="2s" repeatCount="indefinite" />
               </feDropShadow>
             </filter>
-            
-            {/* Hover glow filter */}
             <filter id="hoverGlow" x="-20%" y="-20%" width="140%" height="140%">
               <feGaussianBlur stdDeviation="2" result="blur" />
               <feComposite in="SourceGraphic" in2="blur" operator="over" />
             </filter>
           </defs>
 
-          {/* Ocean background - clean solid fill */}
           <rect
             width={dimensions.width}
             height={dimensions.height}
@@ -392,14 +324,28 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
             className="ocean-background"
             style={{ pointerEvents: 'all', cursor: 'default' }}
             onClick={() => {
-              if (interactive && selectedCountry) {
-                selectCountry(null);
-              }
+              if (interactive && selectedCountry) selectCountry(null);
             }}
           />
 
-          {/* Country paths - wrapped in group for zoom transform */}
           <g ref={gRef} className="map-group">
+            <MissingPolygonMarkers
+              projection={projection}
+              countries={countryMap}
+              mode={mapMode}
+              isDark={isDark}
+              bivariateBreaks={bivariateBreaks}
+              selectedId={selectedCountry}
+              hoveredId={hoveredCountry}
+              onHover={(id) => {
+                if (!interactive || isDragging) return;
+                hoverCountry(id);
+              }}
+              onClick={(id) => {
+                if (!interactive || isDragging) return;
+                selectCountry(id);
+              }}
+            />
             {features.map((feature) => {
               const featureId = String(feature.id);
               const alpha3 = getAlpha3Code(featureId);
@@ -408,7 +354,7 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
               const isSelected = selectedCountry === alpha3;
               const passFilter = passesFilter(alpha3);
 
-              const fillColor = getCountryColor(country, activePillar, isDark);
+              const fillColor = getCountryColor(country, mapMode, isDark, bivariateBreaks);
               const opacity = country ? (passFilter ? 1 : 0.12) : 1;
 
               const pathD = pathGenerator(feature);
@@ -418,25 +364,14 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
                 <path
                   key={featureId}
                   data-country={alpha3}
-                  className={`
-                    country-path
-                    ${isSelected ? 'country-selected' : ''}
-                  `}
+                  className={`country-path ${isSelected ? 'country-selected' : ''}`}
                   d={pathD}
                   fill={fillColor}
                   fillOpacity={opacity}
-                  stroke={
-                    isSelected
-                      ? selectedStrokeColor
-                      : isHovered
-                      ? hoverStrokeColor
-                      : strokeColor
-                  }
+                  stroke={isSelected ? selectedStrokeColor : isHovered ? hoverStrokeColor : strokeColor}
                   strokeWidth={isSelected ? 2.5 : isHovered ? 1.5 : 0.5}
                   filter={isSelected ? 'url(#selectedGlow)' : undefined}
-                  style={{
-                    cursor: interactive && country && !isDragging ? 'pointer' : 'inherit',
-                  }}
+                  style={{ cursor: interactive && country && !isDragging ? 'pointer' : 'inherit' }}
                   onMouseMove={(e) => handleCountryMouseMove(e, featureId)}
                   onMouseLeave={handleCountryMouseLeave}
                   onClick={(e) => handleCountryClick(e, featureId)}
@@ -446,29 +381,22 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
           </g>
         </svg>
 
-        {/* Vignette overlay for depth */}
-        <div 
+        <div
           className="absolute inset-0 pointer-events-none"
           style={{
-            background: isDark 
+            background: isDark
               ? 'radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.4) 100%)'
-              : 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.15) 100%)'
+              : 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.15) 100%)',
           }}
         />
 
-        {/* No results overlay */}
         {!hasFilteredResults && (
           <div className="absolute inset-0 flex items-center justify-center bg-bg-primary/60 backdrop-blur-sm z-10">
             <div className="text-center p-6 rounded-xl bg-bg-secondary border border-border-subtle shadow-lg">
               <p className="text-text-secondary mb-3">No countries match current filters</p>
               <button
                 onClick={() => useAtlasStore.getState().setClusterFilter(null)}
-                className="
-                  px-4 py-2 rounded-lg
-                  bg-accent-primary text-white text-sm font-medium
-                  hover:bg-accent-hover
-                  transition-colors
-                "
+                className="px-4 py-2 rounded-lg bg-accent-primary text-white text-sm font-medium hover:bg-accent-hover transition-colors"
               >
                 Reset filters
               </button>
@@ -476,17 +404,9 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
           </div>
         )}
 
-        {/* Zoom controls - glass container */}
         {interactive && (
-          <motion.div 
-            className="
-              absolute bottom-24 right-6 z-20
-              p-1.5 rounded-xl
-              bg-bg-secondary/80 backdrop-blur-xl
-              border border-border-subtle
-              shadow-xl
-              flex flex-col gap-1.5
-            "
+          <motion.div
+            className="absolute bottom-24 right-6 z-20 p-1.5 rounded-xl bg-bg-secondary/80 backdrop-blur-xl border border-border-subtle shadow-xl flex flex-col gap-1.5"
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
@@ -494,14 +414,7 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
             <motion.button
               onClick={handleZoomIn}
               disabled={currentZoom >= MAX_ZOOM}
-              className="
-                w-10 h-10 rounded-lg
-                flex items-center justify-center
-                text-text-secondary hover:text-text-primary
-                hover:bg-bg-primary
-                disabled:opacity-40 disabled:cursor-not-allowed
-                transition-colors duration-150
-              "
+              className="w-10 h-10 rounded-lg flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               aria-label="Zoom in"
@@ -512,14 +425,7 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
             <motion.button
               onClick={handleZoomOut}
               disabled={currentZoom <= MIN_ZOOM}
-              className="
-                w-10 h-10 rounded-lg
-                flex items-center justify-center
-                text-text-secondary hover:text-text-primary
-                hover:bg-bg-primary
-                disabled:opacity-40 disabled:cursor-not-allowed
-                transition-colors duration-150
-              "
+              className="w-10 h-10 rounded-lg flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               aria-label="Zoom out"
@@ -531,14 +437,7 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
             <motion.button
               onClick={handleResetView}
               disabled={currentZoom === 1}
-              className="
-                w-10 h-10 rounded-lg
-                flex items-center justify-center
-                text-text-secondary hover:text-text-primary
-                hover:bg-bg-primary
-                disabled:opacity-40 disabled:cursor-not-allowed
-                transition-colors duration-150
-              "
+              className="w-10 h-10 rounded-lg flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               aria-label="Reset view"
@@ -549,27 +448,24 @@ export const ChoroplethMap = ({ interactive = true }: ChoroplethMapProps) => {
           </motion.div>
         )}
 
-        {/* Zoom level indicator */}
         {interactive && currentZoom > 1 && (
           <div className="absolute bottom-5 left-5 px-2.5 py-1 rounded-lg bg-bg-secondary/90 backdrop-blur-sm text-xs font-mono text-text-secondary border border-border-subtle z-20">
             {currentZoom.toFixed(1)}×
           </div>
         )}
 
-        {/* Tooltip */}
         {interactive && !isDragging && (
           <MapTooltip
             country={hoveredCountryData ?? null}
-            activePillar={activePillar}
+            mapMode={mapMode}
             mousePosition={mousePosition}
             containerRef={containerRef as React.RefObject<HTMLDivElement>}
           />
         )}
       </div>
 
-      {/* Legend - fixed at bottom */}
       <div className="shrink-0 py-3 px-4 flex justify-center bg-bg-primary">
-        <MapLegend activePillar={activePillar} />
+        <MapLegend mapMode={mapMode} />
       </div>
     </div>
   );

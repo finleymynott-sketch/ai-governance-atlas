@@ -56,11 +56,11 @@ export const ClusterFilter = () => {
   const activeClusterFilter = useAtlasStore((state) => state.activeClusterFilter);
   const setClusterFilter = useAtlasStore((state) => state.setClusterFilter);
 
-  // Calculate cluster counts
+  // Calculate cluster counts (cluster.id is 1-5 numeric)
   const clusterCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
+    const counts: Record<number, number> = {};
     countries.forEach((country) => {
-      counts[country.clusterId] = (counts[country.clusterId] ?? 0) + 1;
+      counts[country.cluster.id] = (counts[country.cluster.id] ?? 0) + 1;
     });
     return counts;
   }, [countries]);

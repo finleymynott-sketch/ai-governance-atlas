@@ -1,62 +1,38 @@
 import { useEffect } from 'react';
 import { useAtlasStore } from '@/store/useAtlasStore';
-import type { Theme } from '@/types';
 
-const THEME_STORAGE_KEY = 'atlas-theme';
 const THEME_ATTRIBUTE = 'data-theme';
 
 /**
- * Hook to manage theme state and synchronization
- * - Persists preference to localStorage
- * - Respects system preference on first load
- * - Syncs with document attribute for CSS variable switching
+ * Initialise the theme on mount: respect the user's persisted Zustand
+ * preference, or fall back to system colour-scheme if nothing is stored.
+ * Persistence is owned by the store's `persist` middleware — this hook only
+ * keeps the DOM attribute in sync.
  */
 export const useTheme = () => {
   const theme = useAtlasStore((state) => state.theme);
   const setTheme = useAtlasStore((state) => state.setTheme);
   const toggleTheme = useAtlasStore((state) => state.toggleTheme);
 
-  // Initialize theme on mount
-  useEffect(() => {
-    const initializeTheme = () => {
-      // Check localStorage first
-      const stored = localStorage.getItem(THEME_STORAGE_KEY);
-      
-      if (stored === 'light' || stored === 'dark') {
-        setTheme(stored);
-        return;
-      }
-
-      // Fall back to system preference
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      const systemTheme: Theme = prefersDark ? 'dark' : 'light';
-      setTheme(systemTheme);
-    };
-
-    initializeTheme();
-  }, [setTheme]);
-
-  // Sync theme changes to DOM and localStorage
+  // Keep the DOM attribute aligned with store state.
   useEffect(() => {
     document.documentElement.setAttribute(THEME_ATTRIBUTE, theme);
-    localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
-  // Listen for system preference changes
+  // First-visit fallback to system preference. We can't tell whether the store
+  // hydrated from persistence or fell back to its 'dark' default, so we only
+  // apply system preference if no `atlas-storage` localStorage entry exists.
   useEffect(() => {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    
-    const handleChange = (e: MediaQueryListEvent) => {
-      // Only auto-switch if user hasn't explicitly set a preference
-      const stored = localStorage.getItem(THEME_STORAGE_KEY);
-      if (!stored) {
-        setTheme(e.matches ? 'dark' : 'light');
-      }
-    };
-
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
-  }, [setTheme]);
+    if (typeof window === 'undefined') return;
+    const persisted = window.localStorage.getItem('atlas-storage');
+    if (!persisted) {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      setTheme(prefersDark ? 'dark' : 'light');
+    }
+    // We intentionally don't re-run on setTheme changes — this is a one-shot
+    // mount-time fallback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return {
     theme,
@@ -67,10 +43,4 @@ export const useTheme = () => {
   };
 };
 
-/**
- * Simple hook to check if dark mode is active
- */
-export const useIsDarkMode = (): boolean => {
-  return useAtlasStore((state) => state.theme === 'dark');
-};
-
+export const useIsDarkMode = (): boolean => useAtlasStore((state) => state.theme === 'dark');

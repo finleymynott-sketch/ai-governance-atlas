@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Globe2, BarChart3, GitCompare, FileText } from 'lucide-react';
+import { Globe2, BarChart3, GitCompare, FileText, ListOrdered } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import { useAtlasStore } from '@/store/useAtlasStore';
 import type { ViewMode } from '@/types';
@@ -13,6 +13,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { id: 'scrollytelling', label: 'Story', icon: <Globe2 className="w-4 h-4" /> },
   { id: 'exploration', label: 'Explore', icon: <BarChart3 className="w-4 h-4" /> },
+  { id: 'rankings', label: 'Rankings', icon: <ListOrdered className="w-4 h-4" /> },
   { id: 'comparison', label: 'Compare', icon: <GitCompare className="w-4 h-4" /> },
   { id: 'methodology', label: 'Methodology', icon: <FileText className="w-4 h-4" /> },
 ];
@@ -70,7 +71,7 @@ export const Header = () => {
           
           {/* Title */}
           <h1 className="text-lg font-semibold text-text-primary tracking-tight">
-            <span className="hidden sm:inline">Build-Break-Balance Atlas</span>
+            <span className="hidden sm:inline">Build–Break–Balance Atlas</span>
             <span className="sm:hidden">B³ Atlas</span>
           </h1>
         </motion.div>

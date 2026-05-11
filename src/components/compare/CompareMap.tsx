@@ -9,6 +9,7 @@ import type { Feature, Geometry } from 'geojson';
 import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { useAtlasStore } from '@/store/useAtlasStore';
 import { MapTooltip } from '@/components/visualisations/MapTooltip';
+import { MissingPolygonMarkers } from '@/components/visualisations/MissingPolygonMarkers';
 import type { Country } from '@/types';
 import { ISO_NUMERIC_TO_ALPHA3 } from '@/types/geo';
 import { COMPARE_COLORS } from './CompareCard';
@@ -203,30 +204,26 @@ export const CompareMap = () => {
   );
 
   // Create projection and path generator
-  const { pathGenerator, features, centroids } = useMemo(() => {
+  const { projection, pathGenerator, features, centroids } = useMemo(() => {
     if (!topoData || dimensions.width === 0 || dimensions.height === 0) {
-      return { pathGenerator: null, features: [], centroids: new Map() };
+      return { projection: null, pathGenerator: null, features: [], centroids: new Map() };
     }
 
     const { width, height } = dimensions;
     const padding = 30;
     const availableWidth = width - padding * 2;
     const availableHeight = height - padding * 2;
-    
+
     const scaleByWidth = availableWidth / 5.5;
     const scaleByHeight = availableHeight / 2.8;
     const scale = Math.min(scaleByWidth, scaleByHeight);
 
-    const proj = geoNaturalEarth1()
-      .scale(scale)
-      .translate([width / 2, height / 2]);
-
+    const proj = geoNaturalEarth1().scale(scale).translate([width / 2, height / 2]);
     const path = geoPath().projection(proj);
 
     const countriesObj = topoData.objects['countries'] as GeometryCollection;
     const feats = topojson.feature(topoData, countriesObj).features as CountryFeature[];
 
-    // Calculate centroids for badges
     const centroidMap = new Map<string, [number, number]>();
     feats.forEach((feature) => {
       const centroid = path.centroid(feature);
@@ -236,7 +233,7 @@ export const CompareMap = () => {
       }
     });
 
-    return { pathGenerator: path, features: feats, centroids: centroidMap };
+    return { projection: proj, pathGenerator: path, features: feats, centroids: centroidMap };
   }, [topoData, dimensions]);
 
   // Get fill color based on comparison state
@@ -262,7 +259,7 @@ export const CompareMap = () => {
   const hoverStrokeColor = isDark ? '#A3A3A3' : '#737373';
 
   // Loading state
-  if (!topoData || !pathGenerator) {
+  if (!topoData || !pathGenerator || !projection) {
     return (
       <div 
         ref={containerRef} 
@@ -375,22 +372,17 @@ export const CompareMap = () => {
               if (!centroid) return null;
 
               return (
-                <g 
-                  key={`badge-${countryId}`} 
+                <g
+                  key={`badge-${countryId}`}
                   transform={`translate(${centroid[0]}, ${centroid[1]})`}
                   style={{ pointerEvents: 'none' }}
                 >
-                  <circle 
-                    r="14" 
-                    fill={COMPARE_COLORS[index]} 
-                    stroke="white"
-                    strokeWidth="2"
-                  />
-                  <text 
-                    textAnchor="middle" 
-                    dy="5" 
-                    fill="white" 
-                    fontSize="13" 
+                  <circle r="14" fill={COMPARE_COLORS[index]} stroke="white" strokeWidth="2" />
+                  <text
+                    textAnchor="middle"
+                    dy="5"
+                    fill="white"
+                    fontSize="13"
                     fontWeight="bold"
                     style={{ fontFamily: 'system-ui, sans-serif' }}
                   >
@@ -399,6 +391,35 @@ export const CompareMap = () => {
                 </g>
               );
             })}
+
+            {/* EU and Singapore have no polygon — render markers so they
+                 can be hovered, selected, and shown as comparison badges. */}
+            <MissingPolygonMarkers
+              projection={projection}
+              countries={countryMap}
+              mode="risk"
+              isDark={isDark}
+              bivariateBreaks={{ hazard: [0.33, 0.66], displacement: [0.33, 0.66] }}
+              hoveredId={hoveredCountry}
+              onHover={(id) => {
+                if (!isDragging) hoverCountry(id);
+              }}
+              onClick={(id) => {
+                if (isDragging) return;
+                if (comparisonCountries.includes(id)) removeFromComparison(id);
+                else if (countryMap.has(id)) addToComparison(id);
+              }}
+              overrideFill={(c) => {
+                const idx = comparisonCountries.indexOf(c.id);
+                if (idx !== -1) return COMPARE_COLORS[idx] ?? '#3B82F6';
+                return isDark ? 'rgba(80, 80, 80, 0.5)' : 'rgba(180, 180, 180, 0.6)';
+              }}
+              compareBadge={(id) => {
+                const idx = comparisonCountries.indexOf(id);
+                if (idx === -1) return null;
+                return { color: COMPARE_COLORS[idx] ?? '#3B82F6', index: idx };
+              }}
+            />
           </g>
         </svg>
 
@@ -491,7 +512,7 @@ export const CompareMap = () => {
         {!isDragging && (
           <MapTooltip
             country={hoveredCountryData ?? null}
-            activePillar="build"
+            mapMode="risk"
             mousePosition={mousePosition}
             containerRef={containerRef as React.RefObject<HTMLDivElement>}
           />
