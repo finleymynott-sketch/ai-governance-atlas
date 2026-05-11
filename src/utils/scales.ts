@@ -1,81 +1,117 @@
 import * as d3 from 'd3';
-import type { Country, ActivePillar } from '@/types';
+import type { ClusterId, Country, MapMode, PillarId } from '@/types';
+import { CLUSTER_DEFINITIONS, MAP_MODE_CONFIG, PILLAR_CONFIG } from '@/types';
+import { valueForMode } from '@/utils/dataLoader';
 
-// === Color Scales ===
+// === Pillar colours ===
 
-/** Pillar color mapping */
-export const PILLAR_COLORS: Record<ActivePillar, string> = {
-  build: '#F59E0B',
-  break: '#EF4444',
-  balance: '#10B981',
-  risk: '#8B5CF6',
+export const PILLAR_COLORS: Record<PillarId, string> = {
+  build: PILLAR_CONFIG.build.color,
+  break: PILLAR_CONFIG.break.color,
+  balance: PILLAR_CONFIG.balance.color,
+  risk: PILLAR_CONFIG.risk.color,
 };
 
-/** Get the CSS variable for a pillar color */
-export const getPillarCSSVar = (pillar: ActivePillar): string => {
-  return `var(--color-${pillar})`;
-};
+export const getPillarCSSVar = (pillar: PillarId): string => `var(${PILLAR_CONFIG[pillar].cssVar})`;
 
 /**
- * Create a sequential color scale for a pillar
- * Light colors for low values, saturated colors for high values
+ * Continuous colour scale anchored on a map mode. Light → saturated for the
+ * relevant pillar. Used by the choropleth and the legend.
  */
-export const createPillarColorScale = (
-  pillar: ActivePillar,
+export const createModeColorScale = (
+  mode: MapMode,
   domain: [number, number] = [0, 1]
 ): d3.ScaleSequential<string> => {
-  const baseColor = PILLAR_COLORS[pillar];
-  
-  // Create a custom interpolator from light to saturated
-  const lighterColor = d3.color(baseColor)?.brighter(1.5)?.formatHex() ?? '#ffffff';
-  const darkerColor = d3.color(baseColor)?.darker(0.3)?.formatHex() ?? baseColor;
-  
-  return d3
-    .scaleSequential()
-    .domain(domain)
-    .interpolator(d3.interpolateRgb(lighterColor, darkerColor));
+  const baseColor = MAP_MODE_CONFIG[mode].color;
+  const lighter = d3.color(baseColor)?.brighter(1.5)?.formatHex() ?? '#ffffff';
+  const darker = d3.color(baseColor)?.darker(0.3)?.formatHex() ?? baseColor;
+  return d3.scaleSequential().domain(domain).interpolator(d3.interpolateRgb(lighter, darker));
 };
 
 /**
- * Create a diverging color scale for risk imbalance
- * Green (negative/good) -> Neutral -> Purple (positive/risky)
+ * Categorical scale for the country-typology map mode. Maps cluster 1-5 to the
+ * dissertation-aligned cluster colour palette.
  */
-export const createRiskDivergingScale = (
-  domain: [number, number] = [-0.5, 0.5]
-): d3.ScaleSequential<string> => {
-  return d3
-    .scaleSequential()
-    .domain(domain)
-    .interpolator(d3.interpolateRgb('#10B981', '#8B5CF6'));
+export const getClusterColor = (id: ClusterId | null | undefined): string => {
+  if (!id) return '#6B7280';
+  return CLUSTER_DEFINITIONS.find((c) => c.id === id)?.color ?? '#6B7280';
 };
 
-// === Size Scales ===
+/**
+ * Diverging scale used for the sovereignty discount mode and for any
+ * Build-minus-Balance gap displays.
+ */
+export const createDivergingScale = (
+  domain: [number, number] = [-0.5, 0.5],
+  low = PILLAR_CONFIG.balance.color,
+  high = PILLAR_CONFIG.risk.color
+): d3.ScaleSequential<string> =>
+  d3.scaleSequential().domain(domain).interpolator(d3.interpolateRgb(low, high));
+
+// === Domains ===
+
+export const getDomainForMode = (countries: Country[], mode: MapMode): [number, number] => {
+  if (countries.length === 0) return [0, 1];
+  // Categorical and bivariate modes don't use a single scalar domain.
+  if (mode === 'clusters' || mode === 'bivariate') return [1, 5];
+  const values = countries.map((c) =>
+    valueForMode(c, mode === 'sovereignty' ? 'sovereignty' : (mode as Exclude<MapMode, 'bivariate' | 'clusters'>))
+  );
+  return [Math.min(...values), Math.max(...values)];
+};
+
+// === Bivariate 3×3 colour matrix (Build × Break) ===
 
 /**
- * Create a radius scale for bubble/circle visualizations
+ * Bivariate choropleth colour matrix for the dissertation's Figure 1 / 2 style
+ * Build × Break view. 3x3 grid: rows are Build tertiles (low/mid/high), cols are
+ * Break-displacement tertiles. Top-right (high Build, high Break) is the
+ * highest-concern corner.
  */
+export const BIVARIATE_PALETTE: string[][] = [
+  ['#e8e8e8', '#ace4e4', '#5ac8c8'], // low Build
+  ['#dfb0d6', '#a5add3', '#5698b9'], // mid Build
+  ['#be64ac', '#8c62aa', '#3b4994'], // high Build
+];
+
+const tertile = (value: number, breaks: [number, number]): 0 | 1 | 2 => {
+  if (value < breaks[0]) return 0;
+  if (value < breaks[1]) return 1;
+  return 2;
+};
+
+/** Compute tertile breakpoints for a value array. */
+export const tertileBreaks = (values: number[]): [number, number] => {
+  if (values.length === 0) return [0.33, 0.66];
+  const sorted = [...values].sort((a, b) => a - b);
+  return [
+    sorted[Math.floor(sorted.length / 3)] ?? 0.33,
+    sorted[Math.floor((sorted.length * 2) / 3)] ?? 0.66,
+  ];
+};
+
+export const bivariateColor = (
+  hazard: number,
+  displacement: number,
+  breaks: { hazard: [number, number]; displacement: [number, number] }
+): string => {
+  const row = tertile(hazard, breaks.hazard);
+  const col = tertile(displacement, breaks.displacement);
+  return BIVARIATE_PALETTE[row]?.[col] ?? '#e8e8e8';
+};
+
+// === Linear and size scales ===
+
 export const createRadiusScale = (
   domain: [number, number] = [0, 1],
   range: [number, number] = [4, 24]
-): d3.ScaleLinear<number, number> => {
-  return d3.scaleSqrt().domain(domain).range(range);
-};
+): d3.ScaleLinear<number, number> => d3.scaleSqrt().domain(domain).range(range);
 
-/**
- * Create a linear scale
- */
 export const createLinearScale = (
   domain: [number, number],
   range: [number, number]
-): d3.ScaleLinear<number, number> => {
-  return d3.scaleLinear().domain(domain).range(range);
-};
+): d3.ScaleLinear<number, number> => d3.scaleLinear().domain(domain).range(range);
 
-// === Position Scales ===
-
-/**
- * Create X/Y scales for scatter plot based on container dimensions
- */
 export const createScatterScales = (
   width: number,
   height: number,
@@ -83,113 +119,28 @@ export const createScatterScales = (
 ): {
   xScale: d3.ScaleLinear<number, number>;
   yScale: d3.ScaleLinear<number, number>;
-} => {
-  return {
-    xScale: d3.scaleLinear().domain([0, 1]).range([padding, width - padding]),
-    yScale: d3.scaleLinear().domain([0, 1]).range([height - padding, padding]),
-  };
-};
+} => ({
+  xScale: d3.scaleLinear().domain([0, 1]).range([padding, width - padding]),
+  yScale: d3.scaleLinear().domain([0, 1]).range([height - padding, padding]),
+});
 
-// === Data Processing ===
+// === Formatting ===
 
-/**
- * Get the domain (min/max) for a specific pillar across countries
- */
-export const getPillarDomain = (
-  countries: Country[],
-  pillar: 'build' | 'break' | 'balance'
-): [number, number] => {
-  if (countries.length === 0) return [0, 1];
-  
-  const values = countries.map((c) => c[pillar].overall);
-  return [Math.min(...values), Math.max(...values)];
-};
+export const normalize = (value: number, min: number, max: number): number =>
+  max === min ? 0.5 : (value - min) / (max - min);
 
-/**
- * Get the domain for risk imbalance
- */
-export const getRiskDomain = (countries: Country[]): [number, number] => {
-  if (countries.length === 0) return [-0.5, 0.5];
-  
-  const values = countries.map((c) => c.riskImbalance);
-  const absMax = Math.max(Math.abs(Math.min(...values)), Math.abs(Math.max(...values)));
-  return [-absMax, absMax];
-};
+export const formatScore = (value: number, decimals = 0): string => (value * 100).toFixed(decimals);
 
-/**
- * Normalize a value to 0-1 range
- */
-export const normalize = (
-  value: number,
-  min: number,
-  max: number
-): number => {
-  if (max === min) return 0.5;
-  return (value - min) / (max - min);
-};
+export const formatPercentage = (value: number): string => `${formatScore(value)}%`;
 
-/**
- * Format a score value for display (0-100 with optional decimal)
- */
-export const formatScore = (value: number, decimals = 0): string => {
-  return (value * 100).toFixed(decimals);
-};
-
-/**
- * Format a score as a percentage string
- */
-export const formatPercentage = (value: number): string => {
-  return `${formatScore(value, 0)}%`;
-};
-
-/**
- * Get a color for a value using a pillar's color scale
- */
-export const getColorForValue = (
-  value: number,
-  pillar: ActivePillar
-): string => {
-  const scale = createPillarColorScale(pillar);
-  return scale(value);
-};
-
-// === Cluster Colors ===
-
-export const CLUSTER_COLORS: Record<string, string> = {
-  'high-build-low-balance': '#EF4444',
-  'balanced-high': '#10B981',
-  'balanced-low': '#6B7280',
-  'low-build-high-balance': '#3B82F6',
-  'emerging': '#F59E0B',
-};
-
-/**
- * Get the color for a cluster
- */
-export const getClusterColor = (clusterId: string): string => {
-  return CLUSTER_COLORS[clusterId] ?? '#6B7280';
-};
-
-// === Axis Helpers ===
-
-/**
- * Generate nice tick values for an axis
- */
-export const generateTicks = (
-  min: number,
-  max: number,
-  count = 5
-): number[] => {
-  const step = (max - min) / (count - 1);
-  return Array.from({ length: count }, (_, i) => min + step * i);
-};
-
-/**
- * Format tick value for display
- */
 export const formatTick = (value: number): string => {
   if (value === 0) return '0';
   if (value === 1) return '100';
   return Math.round(value * 100).toString();
+};
+
+export const generateTicks = (min: number, max: number, count = 5): number[] => {
+  const step = (max - min) / (count - 1);
+  return Array.from({ length: count }, (_, i) => min + step * i);
 };
 

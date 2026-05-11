@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAtlasStore } from '@/store/useAtlasStore';
-import { PillarSelector } from './PillarSelector';
+import { MapModeSwitcher } from './MapModeSwitcher';
 import { ClusterFilter } from './ClusterFilter';
 import { CountrySearch } from './CountrySearch';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -79,9 +79,9 @@ export const Sidebar = () => {
                   <CountrySearch />
                 </div>
                 
-                {/* Pillar selector section */}
+                {/* Map mode switcher (pillars + diagnostic views) */}
                 <div className="sidebar-section">
-                  <PillarSelector />
+                  <MapModeSwitcher />
                 </div>
                 
                 {/* Cluster filter section */}

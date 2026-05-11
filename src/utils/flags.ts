@@ -1,66 +1,80 @@
 /**
- * Convert ISO alpha-3 country code to flag emoji
- * Uses regional indicator symbols to create flag emojis
+ * Convert ISO alpha-3 country code to flag emoji using regional indicator symbols.
+ *
+ * Several alpha-3 codes do not equal alpha-2 + a letter (AUT, BGD, CHL, PAK,
+ * KOR, GBR, etc.), so we explicitly map every country in the dissertation
+ * sample. Falling back to `slice(0, 2)` is unsafe — AUT would render as 🇦🇺
+ * (Australia) instead of 🇦🇹 (Austria).
  */
-
-// Special mappings for codes that don't follow standard alpha-2
 const ISO_ALPHA3_TO_ALPHA2: Record<string, string> = {
-  'GBR': 'GB',
-  'DEU': 'DE',
-  'FRA': 'FR',
-  'CHN': 'CN',
-  'JPN': 'JP',
-  'KOR': 'KR',
-  'IND': 'IN',
-  'BRA': 'BR',
-  'CAN': 'CA',
-  'AUS': 'AU',
-  'NLD': 'NL',
-  'SWE': 'SE',
-  'NOR': 'NO',
-  'DNK': 'DK',
-  'FIN': 'FI',
-  'CHE': 'CH',
-  'SGP': 'SG',
-  'ISR': 'IL',
-  'ARE': 'AE',
-  'SAU': 'SA',
-  'IRL': 'IE',
-  'ESP': 'ES',
-  'ITA': 'IT',
-  'POL': 'PL',
-  'RUS': 'RU',
-  'MEX': 'MX',
-  'IDN': 'ID',
-  'TUR': 'TR',
-  'ZAF': 'ZA',
-  'NZL': 'NZ',
-  'TWN': 'TW',
-  'VNM': 'VN',
-  'THA': 'TH',
-  'MYS': 'MY',
-  'USA': 'US',
+  ARE: 'AE',
+  ARG: 'AR',
+  AUS: 'AU',
+  AUT: 'AT',
+  BEL: 'BE',
+  BGD: 'BD',
+  BRA: 'BR',
+  CAN: 'CA',
+  CHE: 'CH',
+  CHL: 'CL',
+  CHN: 'CN',
+  COL: 'CO',
+  CZE: 'CZ',
+  DEU: 'DE',
+  DNK: 'DK',
+  EGY: 'EG',
+  ESP: 'ES',
+  ETH: 'ET',
+  FIN: 'FI',
+  FRA: 'FR',
+  GBR: 'GB',
+  GHA: 'GH',
+  IDN: 'ID',
+  IND: 'IN',
+  IRL: 'IE',
+  ISR: 'IL',
+  ITA: 'IT',
+  JPN: 'JP',
+  KEN: 'KE',
+  KOR: 'KR',
+  MAR: 'MA',
+  MEX: 'MX',
+  MYS: 'MY',
+  NGA: 'NG',
+  NLD: 'NL',
+  NOR: 'NO',
+  NZL: 'NZ',
+  PAK: 'PK',
+  PHL: 'PH',
+  POL: 'PL',
+  PRT: 'PT',
+  RUS: 'RU',
+  RWA: 'RW',
+  SAU: 'SA',
+  SGP: 'SG',
+  SWE: 'SE',
+  THA: 'TH',
+  TUR: 'TR',
+  TWN: 'TW',
+  USA: 'US',
+  VNM: 'VN',
+  ZAF: 'ZA',
 };
 
 /**
- * Get flag emoji for a country code
- * @param countryCode - ISO 3166-1 alpha-3 code (e.g., "USA", "DEU")
- * @returns Flag emoji string or empty string if conversion fails
+ * Return the flag emoji for an alpha-3 country code, or the EU flag for "EU".
+ * Returns an empty string if the code is unknown.
  */
 export const getFlagEmoji = (countryCode: string): string => {
-  // Get alpha-2 code from mapping or derive from alpha-3
-  const alpha2 = ISO_ALPHA3_TO_ALPHA2[countryCode] ?? countryCode.slice(0, 2);
-  
+  if (countryCode === 'EU') return '🇪🇺';
+  const alpha2 = ISO_ALPHA3_TO_ALPHA2[countryCode];
+  if (!alpha2) return '';
   try {
-    // Convert each letter to regional indicator symbol
-    // 0x1F1E6 is 🇦, and 65 is 'A' in ASCII
     const codePoints = [...alpha2.toUpperCase()].map(
-      (char) => 0x1F1E6 - 65 + char.charCodeAt(0)
+      (char) => 0x1f1e6 - 65 + char.charCodeAt(0)
     );
     return String.fromCodePoint(...codePoints);
   } catch {
     return '';
   }
 };
-
-

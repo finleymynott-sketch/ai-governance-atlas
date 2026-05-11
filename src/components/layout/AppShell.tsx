@@ -153,7 +153,7 @@ const PlaceholderContent = ({ viewMode }: { viewMode: string }) => {
   const current = viewLabels[viewMode] ?? { title: 'Atlas', description: '' };
 
   return (
-    <div className="h-[calc(100vh-3.5rem)] flex flex-col items-center justify-center p-8">
+    <div className="h-[calc(100vh-4rem)] flex flex-col items-center justify-center p-8">
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}

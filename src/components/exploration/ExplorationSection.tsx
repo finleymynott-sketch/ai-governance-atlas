@@ -14,7 +14,7 @@ export const ExplorationSection = () => {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="h-[calc(100vh-3.5rem)] flex overflow-hidden"
+        className="h-[calc(100vh-4rem)] flex overflow-hidden"
       >
         {/* Left sidebar */}
         <Sidebar />

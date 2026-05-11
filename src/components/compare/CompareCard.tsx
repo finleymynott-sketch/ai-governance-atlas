@@ -25,12 +25,12 @@ export const CompareCard = ({ country, index }: CompareCardProps) => {
   const removeFromComparison = useAtlasStore((state) => state.removeFromComparison);
   const clusters = useAtlasStore((state) => state.clusters);
   
-  const cluster = clusters.find((c: Cluster) => c.id === country.clusterId);
+  const cluster = clusters.find((c: Cluster) => c.id === country.cluster.id);
 
   const pillars = [
-    { name: 'Build', value: Math.round(country.build.overall * 100), color: PILLAR_COLORS.build },
-    { name: 'Break', value: Math.round(country.break.overall * 100), color: PILLAR_COLORS.break },
-    { name: 'Balance', value: Math.round(country.balance.overall * 100), color: PILLAR_COLORS.balance },
+    { name: 'Build', value: Math.round(country.build.hazard * 100), color: PILLAR_COLORS.build },
+    { name: 'Break', value: Math.round(country.break.displacement * 100), color: PILLAR_COLORS.break },
+    { name: 'Balance', value: Math.round(country.balance.raw * 100), color: PILLAR_COLORS.balance },
   ];
 
   return (
@@ -102,21 +102,22 @@ export const CompareCard = ({ country, index }: CompareCardProps) => {
         ))}
       </div>
 
-      {/* Risk imbalance */}
+      {/* Net Displacement Risk */}
       <div className="mt-3 pt-3 border-t border-border-subtle">
         <div className="flex items-center justify-between">
-          <span className="text-xs text-text-secondary">Risk Gap</span>
-          <span 
+          <span className="text-xs text-text-secondary">Risk</span>
+          <span
             className="text-xs font-semibold tabular-nums"
-            style={{ 
-              color: country.riskImbalance > 0.1 
-                ? PILLAR_COLORS.break 
-                : country.riskImbalance < -0.1 
-                  ? PILLAR_COLORS.balance 
-                  : 'var(--text-secondary)' 
+            style={{
+              color:
+                country.risk.total > 0.4
+                  ? PILLAR_COLORS.risk
+                  : country.risk.total < 0.1
+                    ? PILLAR_COLORS.balance
+                    : 'var(--text-secondary)',
             }}
           >
-            {country.riskImbalance > 0 ? '+' : ''}{(country.riskImbalance * 100).toFixed(0)}%
+            {(country.risk.total * 100).toFixed(1)} · rank {country.risk.rank}
           </span>
         </div>
       </div>

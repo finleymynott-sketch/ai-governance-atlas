@@ -1,45 +1,65 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getFlagEmoji } from '@/utils/flags';
+import { useAtlasStore } from '@/store/useAtlasStore';
+import type { Country } from '@/types';
 
 interface CountryComparisonCardProps {
   visible: boolean;
+  /** ISO3 ids of the two countries to compare. Defaults to USA / JPN — the
+      dissertation's headline demographic-paradox pair. */
   countries: [string, string];
   showBreakdown: boolean;
 }
 
-interface CountryData {
-  code: string;
-  name: string;
-  aggregateScore: number;
-  build: number;
-  break_: number;
+interface CountryView {
+  country: Country;
+  hazard: number;
+  displacement: number;
   balance: number;
+  exposureRaw: number;
+  oadrRaw: number;
+  risk: number;
+  rank: number;
   archetype: string;
   archetypeSubtitle: string;
 }
 
-const countryDatabase: Record<string, CountryData> = {
-  USA: {
-    code: 'USA',
-    name: 'United States',
-    aggregateScore: 76,
-    build: 92,
-    break_: 78,
-    balance: 42,
-    archetype: 'HIGH CAPABILITY',
-    archetypeSubtitle: 'WEAK GOVERNANCE',
-  },
-  DEU: {
-    code: 'DEU',
-    name: 'Germany',
-    aggregateScore: 75,
-    build: 68,
-    break_: 65,
-    balance: 85,
-    archetype: 'STRONG GOVERNANCE',
-    archetypeSubtitle: 'STEADY CAPABILITY',
-  },
+const buildView = (c: Country): CountryView => {
+  const archetype =
+    c.flags.zeroRiskPathway === 'aging'
+      ? 'AGING ABSORPTION'
+      : c.flags.zeroRiskPathway === 'no-infra'
+        ? 'NO INFRASTRUCTURE'
+        : c.risk.total > 0.4
+          ? 'GOVERNANCE GAP'
+          : c.risk.total > 0.15
+            ? 'MODERATE RISK'
+            : c.risk.total > 0
+              ? 'CAPABILITY ABSORBED'
+              : 'RISK = 0';
+  const subtitle =
+    c.flags.zeroRiskPathway === 'aging'
+      ? 'Exposure → shortage filling'
+      : c.flags.zeroRiskPathway === 'no-infra'
+        ? 'No AI infrastructure yet'
+        : c.risk.total > 0.4
+          ? 'Capability outpaces governance'
+          : c.risk.total > 0.15
+            ? 'Capability moderated'
+            : 'Demographics + governance hold';
+  return {
+    country: c,
+    hazard: c.build.hazard,
+    displacement: c.break.displacement,
+    balance: c.balance.raw,
+    exposureRaw: c.break.indicators.exposureRaw,
+    oadrRaw: c.break.indicators.oadrRaw,
+    risk: c.risk.total,
+    rank: c.risk.rank,
+    archetype,
+    archetypeSubtitle: subtitle,
+  };
 };
 
 const BarRow = ({
@@ -48,24 +68,26 @@ const BarRow = ({
   color,
   delay,
   animate,
+  display,
 }: {
   label: string;
   value: number;
   color: string;
   delay: number;
   animate: boolean;
+  display?: string;
 }) => (
   <div className="space-y-1">
     <div className="flex justify-between text-xs">
       <span className="text-white/60 uppercase tracking-wide text-[10px]">{label}</span>
-      <span className="text-white/80 font-mono text-[10px]">{value}%</span>
+      <span className="text-white/80 font-mono text-[10px]">{display ?? Math.round(value * 100)}</span>
     </div>
     <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
       <motion.div
         className="h-full rounded-full"
         style={{ background: color }}
         initial={{ width: 0 }}
-        animate={{ width: animate ? `${value}%` : 0 }}
+        animate={{ width: animate ? `${Math.min(100, value * 100)}%` : 0 }}
         transition={{ duration: 0.6, delay, ease: [0.4, 0, 0.2, 1] }}
       />
     </div>
@@ -73,12 +95,12 @@ const BarRow = ({
 );
 
 const CountryCard = ({
-  country,
+  view,
   showBreakdown,
   side,
   barDelayOffset,
 }: {
-  country: CountryData;
+  view: CountryView;
   showBreakdown: boolean;
   side: 'left' | 'right';
   barDelayOffset: number;
@@ -88,32 +110,30 @@ const CountryCard = ({
 
   useEffect(() => {
     if (showBreakdown) {
-      const barTimer = setTimeout(() => setShowBars(true), 300);
-      const archetypeTimer = setTimeout(() => setShowArchetype(true), 1800);
+      const t1 = setTimeout(() => setShowBars(true), 300);
+      const t2 = setTimeout(() => setShowArchetype(true), 1800);
       return () => {
-        clearTimeout(barTimer);
-        clearTimeout(archetypeTimer);
+        clearTimeout(t1);
+        clearTimeout(t2);
       };
-    } else {
-      setShowBars(false);
-      setShowArchetype(false);
     }
+    setShowBars(false);
+    setShowArchetype(false);
+    return;
   }, [showBreakdown]);
 
   return (
     <motion.div
-      className="w-[220px] p-4 bg-white/5 rounded-xl border border-white/10"
+      className="w-[230px] p-4 bg-white/5 rounded-xl border border-white/10"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: side === 'left' ? 0.1 : 0.2, duration: 0.4 }}
     >
-      {/* Header */}
       <div className="text-center mb-3">
-        <span className="text-3xl mb-1 block">{getFlagEmoji(country.code)}</span>
-        <h4 className="text-base font-semibold text-white">{country.name}</h4>
+        <span className="text-3xl mb-1 block">{getFlagEmoji(view.country.id)}</span>
+        <h4 className="text-base font-semibold text-white">{view.country.name}</h4>
       </div>
 
-      {/* Aggregate Score (fades out when breakdown shows) */}
       <AnimatePresence mode="wait">
         {!showBreakdown && (
           <motion.div
@@ -124,8 +144,13 @@ const CountryCard = ({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
           >
-            <p className="text-xs text-white/50 uppercase tracking-wide mb-1">Score</p>
-            <p className="text-4xl font-bold text-white">{country.aggregateScore}</p>
+            <p className="text-xs text-white/50 uppercase tracking-wide mb-1">Task exposure</p>
+            <p className="text-4xl font-bold text-white tabular-nums">
+              {view.exposureRaw.toFixed(2)}
+            </p>
+            <p className="text-[10px] text-white/40 mt-2">
+              Hazard {(view.hazard * 100).toFixed(0)}
+            </p>
           </motion.div>
         )}
 
@@ -137,7 +162,6 @@ const CountryCard = ({
             animate={{ opacity: 1 }}
             transition={{ duration: 0.4, delay: 0.2 }}
           >
-            {/* Divider line animation */}
             <motion.div
               className="h-px bg-white/20 mb-3"
               initial={{ scaleX: 0 }}
@@ -145,30 +169,36 @@ const CountryCard = ({
               transition={{ duration: 0.4 }}
             />
 
-            {/* Bars */}
             <BarRow
-              label="Build"
-              value={country.build}
+              label="Hazard (Build)"
+              value={view.hazard}
               color="linear-gradient(to right, #F59E0B, #FBBF24)"
               delay={barDelayOffset}
               animate={showBars}
             />
             <BarRow
-              label="Break"
-              value={country.break_}
+              label="Displacement"
+              value={view.displacement}
               color="linear-gradient(to right, #EF4444, #F87171)"
               delay={barDelayOffset + 0.2}
               animate={showBars}
             />
             <BarRow
               label="Balance"
-              value={country.balance}
+              value={view.balance}
               color="linear-gradient(to right, #10B981, #34D399)"
               delay={barDelayOffset + 0.4}
               animate={showBars}
             />
+            <BarRow
+              label="OADR (workforce age)"
+              value={view.oadrRaw / 60}
+              color="linear-gradient(to right, #6366F1, #818CF8)"
+              delay={barDelayOffset + 0.6}
+              animate={showBars}
+              display={view.oadrRaw.toFixed(1)}
+            />
 
-            {/* Archetype label */}
             <AnimatePresence>
               {showArchetype && (
                 <motion.div
@@ -180,12 +210,15 @@ const CountryCard = ({
                   <p
                     className="text-xs font-bold tracking-wider"
                     style={{
-                      color: country.balance > country.build ? '#10B981' : '#F59E0B',
+                      color: view.risk > 0.3 ? '#EF4444' : view.risk > 0 ? '#F59E0B' : '#10B981',
                     }}
                   >
-                    {country.archetype}
+                    {view.archetype}
                   </p>
-                  <p className="text-[10px] text-white/50 mt-0.5">{country.archetypeSubtitle}</p>
+                  <p className="text-[10px] text-white/50 mt-0.5">{view.archetypeSubtitle}</p>
+                  <p className="text-[10px] text-white/40 mt-1 font-mono">
+                    Risk {(view.risk * 100).toFixed(1)} · rank {view.rank || '—'}/48
+                  </p>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -201,20 +234,21 @@ export const CountryComparisonCard = ({
   countries,
   showBreakdown,
 }: CountryComparisonCardProps) => {
-  const [country1, country2] = countries.map((code) => countryDatabase[code]);
+  const storeCountries = useAtlasStore((state) => state.countries);
+  const c1 = storeCountries.find((c) => c.id === countries[0]);
+  const c2 = storeCountries.find((c) => c.id === countries[1]);
 
-  if (!country1 || !country2) return null;
+  if (!visible || !c1 || !c2) return null;
+
+  const view1 = buildView(c1);
+  const view2 = buildView(c2);
 
   return (
     <AnimatePresence>
       {visible && (
         <motion.div
           className="fixed bottom-24 z-30 pointer-events-none flex justify-center"
-          style={{
-            // Position in the map area (right 60% of screen, after text card)
-            left: '40%',
-            right: '0',
-          }}
+          style={{ left: '40%', right: '0' }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -228,16 +262,9 @@ export const CountryComparisonCard = ({
             transition={{ duration: 0.5 }}
           >
             <div className="bg-black/80 backdrop-blur-md rounded-2xl border border-white/10 p-5 shadow-2xl">
-              {/* Cards container */}
               <div className="flex items-stretch gap-4">
-                <CountryCard
-                  country={country1}
-                  showBreakdown={showBreakdown}
-                  side="left"
-                  barDelayOffset={0}
-                />
+                <CountryCard view={view1} showBreakdown={showBreakdown} side="left" barDelayOffset={0} />
 
-                {/* Equals sign (when aggregate) or VS (when breakdown) */}
                 <div className="flex items-center justify-center px-2">
                   <AnimatePresence mode="wait">
                     {!showBreakdown ? (
@@ -248,7 +275,7 @@ export const CountryComparisonCard = ({
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.8 }}
                       >
-                        =
+                        ≈
                       </motion.span>
                     ) : (
                       <motion.span
@@ -264,15 +291,9 @@ export const CountryComparisonCard = ({
                   </AnimatePresence>
                 </div>
 
-                <CountryCard
-                  country={country2}
-                  showBreakdown={showBreakdown}
-                  side="right"
-                  barDelayOffset={0.1}
-                />
+                <CountryCard view={view2} showBreakdown={showBreakdown} side="right" barDelayOffset={0.1} />
               </div>
 
-              {/* Bottom caption */}
               <AnimatePresence>
                 {!showBreakdown && (
                   <motion.p
@@ -282,7 +303,7 @@ export const CountryComparisonCard = ({
                     exit={{ opacity: 0 }}
                     transition={{ delay: 0.6 }}
                   >
-                    "Nearly identical scores"
+                    Nearly identical task exposure
                   </motion.p>
                 )}
               </AnimatePresence>
